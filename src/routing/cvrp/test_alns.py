@@ -34,7 +34,7 @@ INSTANCE_FILE = os.path.join(base_path, 'output_data', 'Small_structured_sample.
 SEED, ITER = 1234, 1000
 
 # CẤU HÌNH SIMULATED ANNEALING
-start_temperature = 1000
+start_temperature = 100
 end_temperature = 0.1
 cooling_rate = 0.999
 
@@ -151,36 +151,81 @@ def fmt(minutes):
     return f"{int(hours):02d}:{int(mins):02d}"
 
 # <<< HÀM IN KHÔNG THAY ĐỔI CẤU TRÚC, CHỈ THAY ĐỔI CÁCH LÀM TRÒN >>>
+# (Dán vào file test_alns.py, thay thế hàm print_schedule cũ)
+
 def print_schedule(sol):
     """
     ## SIMPLIFIED & CORRECTED for 5-element tuple ##
     In ra lịch trình tối ưu cho một ngày.
+    (Đã cập nhật để in chi tiết INTER-FACTORY)
     """
     prob = sol.problem_instance
     print("\n===== 🧭 LỊCH TRÌNH TỐI ƯU CHO NGÀY =====")
     
-    # <<< SỬA LỖI Ở ĐÂY: GIẢI NÉN 5 PHẦN TỬ >>>
-    # Thêm `_` để nhận giá trị start_time đã lưu nhưng không dùng đến ở đây.
-    for depot, truck_id, custs, shift, _ in sol.schedule:
-        if not custs and shift != 'INTER-FACTORY': continue
+    # Lấy ma trận khoảng cách depot (cần cho INTER-FACTORY)
+    depot_dist_matrix = prob.get('distance_matrix_facilities')
 
-        if shift == 'INTER-FACTORY':
-            print(f"  🏭 Truck {truck_id} ({shift}): {str(custs[0]).replace('_', ' ')}")
-            continue
+    # <<< SỬA Ở ĐÂY: Đổi tên `_` thành `start_time` để sử dụng >>>
+    for depot, truck_id, custs, shift, start_time in sol.schedule:
+        if not custs: continue # Bỏ qua nếu tuyến rỗng
 
         truck_info = find_truck_by_id(truck_id, prob['fleet']['available_trucks'])
-        if not truck_info: continue
+        if not truck_info:
+             print(f"   ⚠️ Lỗi: Không tìm thấy Truck {truck_id}")
+             continue
 
-        # Gọi hàm mô phỏng để tính toán lại timeline chính xác nhất
-        optimal_start, timeline, return_depot_time = simulate_route_and_get_timeline(prob, depot, custs, shift, truck_info)
-        
-        if not timeline: continue
+        if shift == 'INTER-FACTORY':
+            # <<< LOGIC MỚI ĐỂ IN CHI TIẾT INTER-FACTORY >>>
+            try:
+                # 1. Parse custs string
+                parts = str(custs[0]).split('_')
+                source_depot_idx = int(parts[2])
+                target_depot_idx = int(parts[4])
 
-        print(f"  🚚 Truck {truck_id} ({shift}) - Depot {depot} (Xuất phát lúc {fmt(optimal_start)}):")
-        for stop in timeline:
-            print(f"    🧭 Farm {stop['fid']}: Arrive {fmt(stop['arrival'])}, Wait {stop['wait']:.0f} min, "
-                  f"Start {fmt(stop['start'])}, Finish {fmt(stop['finish'])}")
-        
+                if depot_dist_matrix is None:
+                    raise ValueError("Thiếu 'distance_matrix_facilities' trong problem_instance")
+                
+                # 2. Tính toán thời gian
+                travel_dist = depot_dist_matrix[source_depot_idx][target_depot_idx]
+                truck_name = truck_info['type']
+                velocity = 1.0 if truck_name in ["Single", "Truck and Dog"] else 0.5
+                travel_time = travel_dist / velocity if velocity > 0 else float('inf')
+                
+                arrival_time = start_time + travel_time
+
+                # 3. In ra
+                print(f"   🏭 Truck {truck_id} ({shift}) - Từ Depot {source_depot_idx} đến Depot {target_depot_idx}:")
+                # Dùng fmt() để làm tròn thời gian
+                print(f"       - Xuất phát (Depot {source_depot_idx}): {fmt(start_time)}")
+                print(f"       - Đến nơi (Depot {target_depot_idx}): {fmt(arrival_time)} (Di chuyển {fmt(travel_time)})")
+
+            except Exception as e:
+                # In dự phòng nếu parse lỗi hoặc thiếu ma trận
+                print(f"   🏭 Truck {truck_id} ({shift}): {str(custs[0]).replace('_', ' ')} (Lỗi tính toán: {e})")
+            
+            # (Đã bỏ 'continue' ở đây)
+
+        else:
+            # <<< LOGIC CŨ CHO FARM (CÓ ĐIỀU CHỈNH) >>>
+            
+            # Gọi hàm mô phỏng (hàm này đang giả định start=0)
+            optimal_start_calc, timeline, return_depot_time = simulate_route_and_get_timeline(prob, depot, custs, shift, truck_info)
+            
+            if not timeline: continue
+
+            # In thời gian xuất phát THỰC TẾ (lấy từ tuple, không phải từ hàm simulate)
+            print(f"   🚚 Truck {truck_id} ({shift}) - Depot {depot} (Xuất phát lúc {fmt(start_time)}):")
+            
+            # Dịch chuyển (offset) timeline dựa trên thời gian xuất phát thực tế
+            for stop in timeline:
+                # optimal_start_calc là 0 (do hardcode trong hàm simulate)
+                # Ta cộng chênh lệch (start_time) vào timeline
+                offset_arrival = start_time + (stop['arrival'] - optimal_start_calc)
+                offset_start = start_time + (stop['start'] - optimal_start_calc)
+                offset_finish = start_time + (stop['finish'] - optimal_start_calc)
+
+                print(f"       🧭 Farm {stop['fid']}: Arrive {fmt(offset_arrival)}, Wait {stop['wait']:.0f} min, "
+                      f"Start {fmt(offset_start)}, Finish {fmt(offset_finish)}")
 
 # --- 4. CHẠY ALNS (Đã đơn giản hóa) ---
 print("\n--- BẮT ĐẦU VÒNG LẶP ALNS ---")
